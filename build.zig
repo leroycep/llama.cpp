@@ -12,8 +12,8 @@ pub fn build(b: *std.build.Builder) void {
     });
     lib.want_lto = want_lto;
     lib.linkLibCpp();
-    lib.addIncludePath(".");
-    lib.addIncludePath("examples");
+    lib.installHeader("llama.h", "llama.h");
+    lib.installHeader("ggml.h", "ggml.h");
     lib.addCSourceFiles(&.{
         "ggml.c",
     }, &.{});
@@ -52,7 +52,6 @@ fn build_example(name: []const u8, args: anytype) *std.build.LibExeObjStep {
         .optimize = args.optimize,
     });
     exe.want_lto = want_lto;
-    exe.addIncludePath(".");
     exe.addIncludePath("examples");
     exe.addCSourceFiles(&.{
         b.fmt("examples/{s}/{s}.cpp", .{ name, name }),
