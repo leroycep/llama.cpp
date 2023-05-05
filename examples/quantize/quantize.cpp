@@ -1,6 +1,6 @@
-#include "build-info.h"
-
+#include "ggml.h"
 #include "llama.h"
+#include "config.h"
 
 #include <cstdio>
 #include <map>

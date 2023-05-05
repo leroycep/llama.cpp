@@ -22,7 +22,12 @@ pub fn build(b: *std.build.Builder) void {
     }, &.{"-std=c++11"});
     b.installArtifact(lib);
 
-    const build_args = .{ .b = b, .lib = lib, .target = target, .optimize = optimize, .want_lto = want_lto };
+    const config_header = b.addConfigHeader(.{}, .{
+        .BUILD_NUMBER = std.mem.trim(u8, b.exec(&.{ "git", "rev-list", "--count", "HEAD" }), "\n\r "),
+        .BUILD_COMMIT = std.mem.trim(u8, b.exec(&.{ "git", "rev-parse", "--short", "HEAD" }), "\n\r "),
+    });
+
+    const build_args = .{ .b = b, .lib = lib, .target = target, .optimize = optimize, .want_lto = want_lto, .config_header = config_header };
 
     const exe = build_example("main", build_args);
     _ = build_example("quantize", build_args);
@@ -53,6 +58,7 @@ fn build_example(name: []const u8, args: anytype) *std.build.LibExeObjStep {
     });
     exe.want_lto = want_lto;
     exe.addIncludePath("examples");
+    exe.addConfigHeader(args.config_header);
     exe.addCSourceFiles(&.{
         b.fmt("examples/{s}/{s}.cpp", .{ name, name }),
         "examples/common.cpp",

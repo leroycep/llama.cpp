@@ -1,6 +1,6 @@
 #include "common.h"
 #include "llama.h"
-#include "build-info.h"
+#include "config.h"
 
 #include <cmath>
 #include <ctime>
