@@ -1,0 +1,11 @@
+.{
+	.name = "llama",
+	.version = "0.1.0",
+	.dependencies = .{
+		.clblast = .{
+			.url = "https://github.com/leroycep/CLBlast/archive/17f1d2ae3519c4e97a9d0d23219aa2c59815051d.tar.gz",
+			.hash = "1220363f1a8bd1d3d54c695a29d606183cba1cbfc3f6c983e579c3831c7c428f19be",
+		},
+	},
+}
+
