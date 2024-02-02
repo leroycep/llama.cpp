@@ -1,137 +1,149 @@
-// Compatible with Zig Version 0.11.0
 const std = @import("std");
-const ArrayList = std.ArrayList;
-const Compile = std.Build.Step.Compile;
-const ConfigHeader = std.Build.Step.ConfigHeader;
-const Mode = std.builtin.Mode;
-
-const Maker = struct {
-    builder: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: Mode,
-    enable_lto: bool,
-
-    include_dirs: ArrayList([]const u8),
-    cflags: ArrayList([]const u8),
-    cxxflags: ArrayList([]const u8),
-    objs: ArrayList(*Compile),
-
-    fn addInclude(m: *Maker, dir: []const u8) !void {
-        try m.include_dirs.append(dir);
-    }
-    fn addProjectInclude(m: *Maker, path: []const []const u8) !void {
-        try m.addInclude(try m.builder.build_root.join(m.builder.allocator, path));
-    }
-    fn addCFlag(m: *Maker, flag: []const u8) !void {
-        try m.cflags.append(flag);
-    }
-    fn addCxxFlag(m: *Maker, flag: []const u8) !void {
-        try m.cxxflags.append(flag);
-    }
-    fn addFlag(m: *Maker, flag: []const u8) !void {
-        try m.addCFlag(flag);
-        try m.addCxxFlag(flag);
-    }
-
-    fn init(builder: *std.Build) !Maker {
-        const target = builder.standardTargetOptions(.{});
-        const zig_version = @import("builtin").zig_version_string;
-        const commit_hash = try std.ChildProcess.run(
-            .{ .allocator = builder.allocator, .argv = &.{ "git", "rev-parse", "HEAD" } },
-        );
-        try std.fs.cwd().writeFile("common/build-info.cpp", builder.fmt(
-            \\int LLAMA_BUILD_NUMBER = {};
-            \\char const *LLAMA_COMMIT = "{s}";
-            \\char const *LLAMA_COMPILER = "Zig {s}";
-            \\char const *LLAMA_BUILD_TARGET = "{s}";
-            \\
-        , .{ 0, commit_hash.stdout[0 .. commit_hash.stdout.len - 1], zig_version, try target.result.zigTriple(builder.allocator) }));
-        var m = Maker{
-            .builder = builder,
-            .target = target,
-            .optimize = builder.standardOptimizeOption(.{}),
-            .enable_lto = false,
-            .include_dirs = ArrayList([]const u8).init(builder.allocator),
-            .cflags = ArrayList([]const u8).init(builder.allocator),
-            .cxxflags = ArrayList([]const u8).init(builder.allocator),
-            .objs = ArrayList(*Compile).init(builder.allocator),
-        };
-
-        try m.addCFlag("-std=c11");
-        try m.addCxxFlag("-std=c++11");
-        try m.addProjectInclude(&.{});
-        try m.addProjectInclude(&.{"common"});
-        return m;
-    }
-
-    fn obj(m: *const Maker, name: []const u8, src: []const u8) *Compile {
-        const o = m.builder.addObject(.{ .name = name, .target = m.target, .optimize = m.optimize });
-        if (o.rootModuleTarget().abi != .msvc)
-            o.defineCMacro("_GNU_SOURCE", null);
-
-        if (std.mem.endsWith(u8, src, ".c")) {
-            o.addCSourceFiles(.{ .files = &.{src}, .flags = m.cflags.items });
-            o.linkLibC();
-        } else {
-            o.addCSourceFiles(.{ .files = &.{src}, .flags = m.cxxflags.items });
-            if (o.rootModuleTarget().abi == .msvc) {
-                o.linkLibC(); // need winsdk + crt
-            } else {
-                // linkLibCpp already add (libc++ + libunwind + libc)
-                o.linkLibCpp();
-            }
-        }
-        for (m.include_dirs.items) |i| o.addIncludePath(.{ .path = i });
-        o.want_lto = m.enable_lto;
-        return o;
-    }
-
-    fn exe(m: *const Maker, name: []const u8, src: []const u8, deps: []const *Compile) *Compile {
-        const e = m.builder.addExecutable(.{ .name = name, .target = m.target, .optimize = m.optimize });
-        e.addCSourceFiles(.{ .files = &.{src}, .flags = m.cxxflags.items });
-        for (deps) |d| e.addObject(d);
-        for (m.objs.items) |o| e.addObject(o);
-        for (m.include_dirs.items) |i| e.addIncludePath(.{ .path = i });
-
-        // https://github.com/ziglang/zig/issues/15448
-        if (e.rootModuleTarget().abi == .msvc) {
-            e.linkLibC(); // need winsdk + crt
-        } else {
-            // linkLibCpp already add (libc++ + libunwind + libc)
-            e.linkLibCpp();
-        }
-        m.builder.installArtifact(e);
-        e.want_lto = m.enable_lto;
-        return e;
-    }
-};
 
 pub fn build(b: *std.Build) !void {
-    var make = try Maker.init(b);
-    make.enable_lto = b.option(bool, "lto", "Enable LTO optimization, (default: false)") orelse false;
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
 
-    const ggml = make.obj("ggml", "ggml.c");
-    const ggml_alloc = make.obj("ggml-alloc", "ggml-alloc.c");
-    const ggml_backend = make.obj("ggml-backend", "ggml-backend.c");
-    const ggml_quants = make.obj("ggml-quants", "ggml-quants.c");
-    const llama = make.obj("llama", "llama.cpp");
-    const buildinfo = make.obj("common", "common/build-info.cpp");
-    const common = make.obj("common", "common/common.cpp");
-    const console = make.obj("console", "common/console.cpp");
-    const sampling = make.obj("sampling", "common/sampling.cpp");
-    const grammar_parser = make.obj("grammar-parser", "common/grammar-parser.cpp");
-    const train = make.obj("train", "common/train.cpp");
-    const clip = make.obj("clip", "examples/llava/clip.cpp");
+    const zig_version = @import("builtin").zig_version_string;
+    const commit_hash = b.run(&.{ "git", "rev-parse", "HEAD" });
 
-    _ = make.exe("main", "examples/main/main.cpp", &.{ ggml, ggml_alloc, ggml_backend, ggml_quants, llama, common, buildinfo, sampling, console, grammar_parser });
-    _ = make.exe("quantize", "examples/quantize/quantize.cpp", &.{ ggml, ggml_alloc, ggml_backend, ggml_quants, llama, common, buildinfo });
-    _ = make.exe("perplexity", "examples/perplexity/perplexity.cpp", &.{ ggml, ggml_alloc, ggml_backend, ggml_quants, llama, common, buildinfo });
-    _ = make.exe("embedding", "examples/embedding/embedding.cpp", &.{ ggml, ggml_alloc, ggml_backend, ggml_quants, llama, common, buildinfo });
-    _ = make.exe("finetune", "examples/finetune/finetune.cpp", &.{ ggml, ggml_alloc, ggml_backend, ggml_quants, llama, common, buildinfo, train });
-    _ = make.exe("train-text-from-scratch", "examples/train-text-from-scratch/train-text-from-scratch.cpp", &.{ ggml, ggml_alloc, ggml_backend, ggml_quants, llama, common, buildinfo, train });
+    const generated_files = b.addWriteFiles();
+    const llama_build_info_cpp = generated_files.add("common/build-info.cpp", b.fmt(
+        \\int LLAMA_BUILD_NUMBER = {};
+        \\char const *LLAMA_COMMIT = "{s}";
+        \\char const *LLAMA_COMPILER = "Zig {s}";
+        \\char const *LLAMA_BUILD_TARGET = "{s}";
+        \\
+    , .{ 0, std.mem.trim(u8, commit_hash, "\n\r"), zig_version, try target.result.zigTriple(b.allocator) }));
 
-    const server = make.exe("server", "examples/server/server.cpp", &.{ ggml, ggml_alloc, ggml_backend, ggml_quants, llama, common, buildinfo, sampling, grammar_parser, clip });
+    const ggml = b.addStaticLibrary(.{
+        .name = "ggml",
+        .target = target,
+        .optimize = optimize,
+    });
+    if (ggml.rootModuleTarget().abi != .msvc)
+        ggml.defineCMacro("_GNU_SOURCE", null);
+    ggml.root_module.c_std = .C11;
+    ggml.addCSourceFiles(.{ .files = &.{
+        "ggml.c",
+        "ggml-quants.c",
+        "ggml-alloc.c",
+        "ggml-backend.c",
+    } });
+    ggml.addIncludePath(.{ .path = "./" });
+    ggml.installHeader("ggml.h", "ggml.h");
+    ggml.installHeader("ggml-alloc.h", "ggml-alloc.h");
+    ggml.installHeader("ggml-backend.h", "ggml-backend.h");
+    ggml.linkLibC();
+    b.installArtifact(ggml);
+
+    const llama = b.addStaticLibrary(.{
+        .name = "llama",
+        .target = target,
+        .optimize = optimize,
+    });
+    llama.addCSourceFile(.{ .file = .{ .path = "llama.cpp" } });
+    llama.addCSourceFile(.{ .file = llama_build_info_cpp });
+    llama.linkLibrary(ggml);
+    llama.installHeader("llama.h", "llama.h");
+    llama.linkLibCpp();
+    b.installArtifact(llama);
+
+    const common = b.addStaticLibrary(.{
+        .name = "common",
+        .target = target,
+        .optimize = optimize,
+    });
+    common.addCSourceFiles(.{ .files = &.{
+        "common/common.cpp",
+        "common/console.cpp",
+        "common/sampling.cpp",
+        "common/grammar-parser.cpp",
+        "common/train.cpp",
+    } });
+    common.linkLibrary(llama);
+    common.addIncludePath(.{ .path = "common" });
+    common.installHeader("common/common.h", "common.h");
+    common.installHeader("common/console.h", "console.h");
+    common.installHeader("common/sampling.h", "sampling.h");
+    common.installHeader("common/grammar-parser.h", "grammar-parser.h");
+    common.installHeader("common/log.h", "log.h");
+    common.installHeader("common/train.h", "train.h");
+    common.installHeader("common/stb_image.h", "stb_image.h");
+
+    addExample(b, .{
+        .name = "main",
+        .target = target,
+        .optimize = optimize,
+        .libraries = &.{ llama, common },
+    });
+
+    addExample(b, .{
+        .name = "quantize",
+        .target = target,
+        .optimize = optimize,
+        .libraries = &.{ llama, common },
+    });
+
+    addExample(b, .{
+        .name = "perplexity",
+        .target = target,
+        .optimize = optimize,
+        .libraries = &.{ llama, common },
+    });
+
+    addExample(b, .{
+        .name = "embedding",
+        .target = target,
+        .optimize = optimize,
+        .libraries = &.{ llama, common },
+    });
+
+    addExample(b, .{
+        .name = "finetune",
+        .target = target,
+        .optimize = optimize,
+        .libraries = &.{ llama, common },
+    });
+
+    addExample(b, .{
+        .name = "train-text-from-scratch",
+        .target = target,
+        .optimize = optimize,
+        .libraries = &.{ llama, common },
+    });
+
+    const server = b.addExecutable(.{
+        .name = "server",
+        .target = target,
+        .optimize = optimize,
+    });
+    server.addCSourceFiles(.{ .files = &.{
+        "examples/server/server.cpp",
+        "examples/llava/clip.cpp",
+    } });
+    server.linkLibrary(llama);
+    server.linkLibrary(common);
     if (server.rootModuleTarget().os.tag == .windows) {
         server.linkSystemLibrary("ws2_32");
     }
+    b.installArtifact(server);
+}
+
+fn addExample(b: *std.Build, options: struct {
+    name: []const u8,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.Mode,
+    libraries: []const *std.Build.Step.Compile,
+}) void {
+    const example = b.addExecutable(.{
+        .name = options.name,
+        .target = options.target,
+        .optimize = options.optimize,
+    });
+    example.addCSourceFile(.{ .file = .{ .path = b.fmt("examples/{s}/{s}.cpp", .{ options.name, options.name }) } });
+    for (options.libraries) |lib| {
+        example.linkLibrary(lib);
+    }
+    b.installArtifact(example);
 }
