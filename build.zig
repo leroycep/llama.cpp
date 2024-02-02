@@ -5,7 +5,13 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
 
     const zig_version = @import("builtin").zig_version_string;
-    const commit_hash = b.run(&.{ "git", "rev-parse", "HEAD" });
+
+    // If git fails to find a version, use a dummy hash value instead.
+    // We won't be in a git repository when the file is downloaded as an archive
+    // by zig. Also, zig 0.12.0-dev.2059+42389cb9c doesn't have any way to get
+    // the url it was fetched from or the package's hash, as far as I know.
+    var git_hash_exit_code: u8 = undefined;
+    const commit_hash = b.runAllowFail(&.{ "git", "rev-parse", "HEAD" }, &git_hash_exit_code, .Ignore) catch "0000000000000000000000000000000000000000";
 
     const generated_files = b.addWriteFiles();
     const llama_build_info_cpp = generated_files.add("common/build-info.cpp", b.fmt(
