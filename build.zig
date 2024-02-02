@@ -55,6 +55,40 @@ pub fn build(b: *std.Build) !void {
     llama.linkLibCpp();
     b.installArtifact(llama);
 
+    // raw header file bindings
+    const ggml_h_zig = b.addModule("ggml.h", .{
+        .root_source_file = .{ .path = "bindings/zig/src/ggml.h.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    // raw header file bindings
+    const llama_h_zig = b.addModule("llama.h", .{
+        .root_source_file = .{ .path = "bindings/zig/src/llama.h.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    llama_h_zig.addImport("ggml.h", ggml_h_zig);
+
+    const zig_bindings = b.addModule("llama", .{
+        .root_source_file = .{ .path = "bindings/zig/src/llama.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    zig_bindings.linkLibrary(llama);
+    zig_bindings.addImport("llama.h", llama_h_zig);
+
+    // zig examples
+    {
+        const zig_simple = b.addExecutable(.{
+            .name = "zig-simple",
+            .root_source_file = .{ .path = "bindings/zig/examples/simple.zig" },
+            .target = target,
+            .optimize = optimize,
+        });
+        zig_simple.root_module.addImport("llama", zig_bindings);
+        b.installArtifact(zig_simple);
+    }
+
     const common = b.addStaticLibrary(.{
         .name = "common",
         .target = target,
