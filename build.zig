@@ -4,6 +4,13 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const enable_clblast = b.option(bool, "clblast", "Enable clblast for GPU accelerated layers (default: false)") orelse false;
+
+    const clblast = b.dependency("clblast", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const zig_version = @import("builtin").zig_version_string;
 
     // If git fails to find a version, use a dummy hash value instead.
@@ -40,6 +47,14 @@ pub fn build(b: *std.Build) !void {
     ggml.installHeader("ggml.h", "ggml.h");
     ggml.installHeader("ggml-alloc.h", "ggml-alloc.h");
     ggml.installHeader("ggml-backend.h", "ggml-backend.h");
+
+    if (enable_clblast) {
+        ggml.addCSourceFile(.{ .file = .{ .path = "ggml-opencl.cpp" } });
+        ggml.installHeader("ggml-opencl.h", "ggml-opencl.h");
+        ggml.root_module.addCMacro("GGML_USE_CLBLAST", "1");
+        ggml.root_module.linkLibrary(clblast.artifact("clblast"));
+    }
+
     ggml.linkLibC();
     b.installArtifact(ggml);
 
